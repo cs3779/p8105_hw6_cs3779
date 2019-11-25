@@ -158,7 +158,7 @@ cv_df %>%
 Note: Based on the rmse values, it would seem that the provided models (estimating birth weight by baby length and gestational weeks, and estimating birth weight by baby length, gestational weeks, head circumfrance, sex, and all of their interactions) are better than the built model since they both have lower rmse values than the built model.
 
 ## **Problem 2**
-```{r}
+```{r, echo=FALSE, message=FALSE}
 weather_df = 
   rnoaa::meteo_pull_monitors(
     c("USW00094728"),
@@ -170,9 +170,78 @@ weather_df =
     tmin = tmin / 10,
     tmax = tmax / 10) %>%
   select(name, id, everything())
+
+set.seed(1)
 ```
 
+### **Creating Boot Strap Samples**
+```{r}
+boot_sample = function(x) {
+  sample_frac(x, replace = TRUE)
+}
 
+bootsamp_df = 
+  tibble(
+    strap_number = 1:5000,
+    strap_sample = rerun(5000, boot_sample(weather_df))
+  )
+
+bootsamp_results_betas = 
+  bootsamp_df %>% 
+  mutate(
+    models = map(strap_sample, ~lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::tidy) 
+  ) %>% 
+  select(-models, -strap_sample) %>% 
+  unnest()
+```
+
+### **Analyzing Betas**
+```{r}
+bootsamp_betas_int = 
+  bootsamp_results_betas %>% 
+  select(strap_number, term, estimate) %>% 
+  filter(term=="(Intercept)")
+
+bootsamp_betas_x =
+  bootsamp_results_betas %>% 
+  select(strap_number, term, estimate) %>% 
+  filter(term=="tmin")
+
+bootsamp_betas = 
+  inner_join(bootsamp_betas_int, bootsamp_betas_x, by="strap_number") %>% 
+  mutate(
+    logbetas = log(estimate.x*estimate.y)
+  )
+```
+
+### **Analyzing r-squares**
+```{r}
+bootsamp_results_rsq = 
+  bootsamp_df %>% 
+  mutate(
+    models = map(strap_sample, ~lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::glance) 
+  ) %>% 
+  select(-models, -strap_sample) %>% 
+  unnest() %>% 
+  select(strap_number, r.squared)
+
+bootsamp_final = 
+  inner_join(bootsamp_betas, bootsamp_results_rsq, by="strap_number") %>% 
+  select(strap_number, logbetas, r.squared)
+
+ggplot(bootsamp_final, aes(x=logbetas, y=r.squared)) + geom_point()
+```
+
+Note: From looking at the distribution of R-squared values compared to the Log(Beta_0 * Beta_1) value of each bootstrapped sample, it seems that as the value of logbetas grew, the r-square value drops (i.e. a negative correlation between the two values).
+
+
+### **95% Confidence Intervals for Betas and R-squares**
+```{r}
+kable(quantile(bootsamp_final$logbetas, c(0.025, 0.975)))
+kable(quantile(bootsamp_final$r.squared, c(0.025, 0.975)))
+```
 
 
 

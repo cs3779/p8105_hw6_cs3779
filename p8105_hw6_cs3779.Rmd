@@ -10,7 +10,8 @@ library(tidyverse)
 library(knitr)
 library(readxl)
 library(viridis)
-library(patchwork)
+library(modelr)
+library(mgcv)
 knitr::opts_chunk$set(
 	echo = TRUE,
 	warning = FALSE,
@@ -45,9 +46,10 @@ bw_df =
 
 colSums(is.na(bw_df))
 ```
+
 Notes: No missing values for any of the columns.
 
-## **Model Building**
+## **My Model Building**
 ```{r}
 linearmod = lm(bwt ~ babysex + delbmi + gaweeks + fincome + momage + ppbmi + smoken, data = bw_df)
 
@@ -76,15 +78,99 @@ linearmod_final %>%
   mutate(term = str_replace(term, "^frace", "Father's Race: ")) %>% 
   kable(digits = 3)
 ```
+
 Notes: I started with covariates that wouldn't be too colinear with birthweight like birth length or head circumfrance (i.e. where a higher value in one automatically determines a higher value in the other without a clear causal direction). I then went through each variable adding it to the model to test if that variable and the other variables were/remained significant. If so, I kept them in the model. I conducted partial F-tests to determine if categorical variables were significant. _frace_ was significant compared to _mrace_, but after including it in the model, _momage_ and _fincome_ became insignificant, so I removed them from the final model. I tried to be as parsimonious as well by including BMIs instead of both height and weight (pre-pregnancy and delivery).
 
-## **Model Diagnostics**
+## **My Model Diagnostics**
 ```{r}
-bw_df %>% 
-  modelr::add_residuals(linearmod_final)
-  
+resid = modelr::add_residuals(bw_df, linearmod_final) %>% 
+  select(resid)
+pred = modelr::add_predictions(bw_df, linearmod_final) %>% 
+  select(pred)
+
+resid_pred = 
+  bind_cols(resid, pred) %>% 
+  ggplot(aes(x=resid, y=pred)) + geom_point()
+
+resid_pred_vio = 
+  bind_cols(resid, pred) %>% 
+  ggplot(aes(x=resid, y=pred)) + geom_violin()
+
+resid_pred
+resid_pred_vio
 ```
 
+## **Provided Model Building**
+```{r}
+linmod_1 = lm(bwt ~ blength + gaweeks, data = bw_df)
+
+linmod_1 %>% 
+  broom::tidy() %>% 
+  kable(digits = 3)
+
+linmod_2 = lm(bwt ~ babysex + blength + bhead + babysex*blength + babysex*bhead + blength*bhead + babysex*blength*bhead, data = bw_df)
+
+linmod_2 %>% 
+  broom::tidy() %>% 
+  kable(digist = 3)
+```
+
+## **Cross-Validation between My and Provided Models**
+```{r}
+cv_df = 
+  crossv_mc(bw_df, 100)
+
+cv_df =  
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+
+cv_df = 
+  cv_df %>% 
+  mutate(
+    linearmod_final = map(train, ~lm(bwt ~ babysex + delbmi + gaweeks + ppbmi + smoken + frace, data = .x)),
+    linmod_1 = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    linmod_2 = map(train, ~lm(bwt ~ babysex + blength + bhead + babysex*blength + babysex*bhead + blength*bhead + babysex*blength*bhead, data = .x))
+  ) %>% 
+  mutate(
+    rmse_linmod_final = map2_dbl(linearmod_final, test, ~rmse(model = .x, data = .y)),
+    rmse_linmod_1 = map2_dbl(linmod_1, test, ~rmse(model = .x, data = .y)),
+    rmse_linmod_2 = map2_dbl(linmod_2, test, ~rmse(model = .x, data = .y))
+  )
+```
+
+### **Comparing My Model to 1st Provided Model**
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+    ) %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x=model, y=rmse)) + geom_violin()
+```
+
+Note: Based on the rmse values, it would seem that the provided models (estimating birth weight by baby length and gestational weeks, and estimating birth weight by baby length, gestational weeks, head circumfrance, sex, and all of their interactions) are better than the built model since they both have lower rmse values than the built model.
+
+## **Problem 2**
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
 
 
 
